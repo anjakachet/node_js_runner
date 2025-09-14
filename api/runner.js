@@ -1,50 +1,81 @@
+// api/runner.js
 import OpenAI from "openai";
-
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
-const ASSISTANT_ID = process.env.ASSISTANT_ID; // put your asst_xxx here
-console.log("Using Assistant:", process.env.ASSISTANT_ID ? "✅ set" : "❌ missing");
-console.log("Using API Key:", process.env.OPENAI_API_KEY ? "✅ set" : "❌ missing");
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Only POST allowed" });
   }
 
-  const { query } = req.body;
-
   try {
-    // Step 1: create a thread
+    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const { query } = req.body;
+
+    if (!query) {
+      return res.status(400).json({ error: "Missing query" });
+    }
+
+    // 1. Create a thread
     const thread = await client.beta.threads.create();
 
-    // Step 2: add user message
+    // 2. Add user message
     await client.beta.threads.messages.create(thread.id, {
       role: "user",
       content: query,
     });
 
-    // Step 3: run the assistant
+    // 3. Start a run
     let run = await client.beta.threads.runs.create(thread.id, {
-      assistant_id: ASSISTANT_ID,
+      assistant_id: process.env.ASSISTANT_ID,
     });
 
-    // Poll until the run completes
-    while (run.status === "in_progress" || run.status === "queued") {
-      await new Promise(r => setTimeout(r, 2000));
+    // 4. Handle tool calls if required
+    if (run.status === "requires_action") {
+      const toolCalls = run.required_action.submit_tool_outputs.tool_calls;
+
+      const toolOutputs = await Promise.all(
+        toolCalls.map(async (tool) => {
+          if (tool.function.name === "web_search") {
+            const searchQuery = JSON.parse(tool.function.arguments).query;
+
+            // Call your search-service
+            const resp = await fetch("https://search-service.vercel.app/api/search", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ query: searchQuery }),
+            });
+            const results = await resp.json();
+
+            return {
+              tool_call_id: tool.id,
+              output: JSON.stringify(results),
+            };
+          }
+        })
+      );
+
+      // Submit results back to Assistant
+      run = await client.beta.threads.runs.submitToolOutputs(
+        thread.id,
+        run.id,
+        { tool_outputs: toolOutputs }
+      );
+    }
+
+    // 5. Poll until run completes
+    while (run.status !== "completed") {
+      await new Promise((r) => setTimeout(r, 1000));
       run = await client.beta.threads.runs.retrieve(thread.id, run.id);
     }
 
-    // Fetch final messages
+    // 6. Retrieve final messages
     const messages = await client.beta.threads.messages.list(thread.id);
 
-    return res.status(200).json({
-      status: run.status,
-      output: messages.data[0].content[0].text.value,
-    });
+    // 7. Extract the latest assistant response
+    const output = messages.data[0].content[0].text.value;
+
+    res.json({ status: run.status, output });
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: err.message });
+    console.error("Runner error:", err);
+    res.status(500).json({ error: err.message });
   }
 }

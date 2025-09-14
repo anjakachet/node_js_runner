@@ -44,18 +44,40 @@ export default async function handler(req, res) {
             console.log("👉 Tool call detail:", JSON.stringify(tool, null, 2));
 
             if (tool.function.name === "web_search") {
-              const query = JSON.parse(tool.function.arguments).query;
-              console.log("🌍 Web search triggered with query:", query);
+              const searchQuery = JSON.parse(tool.function.arguments).query;
+              console.log("🌍 Web search triggered with query:", searchQuery);
 
-              // Placeholder: in production call your own search service here
-              const fakeResults = [
-                { title: "Stub Result", snippet: "This is a placeholder result.", url: "https://example.com" }
-              ];
+              try {
+                const resp = await fetch(
+                  `https://api.searchapi.io/api/v1/search?q=${encodeURIComponent(searchQuery)}&engine=google`,
+                  {
+                    headers: {
+                      "Authorization": `Bearer ${process.env.SEARCHAPI_API_KEY}`,
+                    },
+                  }
+                );
 
-              return {
-                tool_call_id: tool.id,
-                output: JSON.stringify(fakeResults),
-              };
+                const data = await resp.json();
+                console.log("🔎 Raw search response:", JSON.stringify(data, null, 2));
+
+                const results =
+                  data.results?.map((r) => ({
+                    title: r.title,
+                    snippet: r.snippet,
+                    url: r.link,
+                  })) || [];
+
+                return {
+                  tool_call_id: tool.id,
+                  output: JSON.stringify(results),
+                };
+              } catch (err) {
+                console.error("❌ Search API error:", err);
+                return {
+                  tool_call_id: tool.id,
+                  output: JSON.stringify([{ title: "Error", snippet: err.message, url: "" }]),
+                };
+              }
             }
 
             return { tool_call_id: tool.id, output: "{}" };

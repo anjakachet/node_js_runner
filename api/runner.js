@@ -5,7 +5,9 @@ const client = new OpenAI({
 });
 
 const ASSISTANT_ID = process.env.ASSISTANT_ID; // put your asst_xxx here
-console.log("Assistant ID:", process.env.ASSISTANT_ID);
+console.log("Using Assistant:", process.env.ASSISTANT_ID ? "✅ set" : "❌ missing");
+console.log("Using API Key:", process.env.OPENAI_API_KEY ? "✅ set" : "❌ missing");
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Only POST allowed" });

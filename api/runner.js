@@ -60,12 +60,27 @@ export default async function handler(req, res) {
                 const data = await resp.json();
                 console.log("🔎 Raw search response:", JSON.stringify(data, null, 2));
 
-                const results =
-                  data.results?.map((r) => ({
-                    title: r.title,
-                    snippet: r.snippet,
-                    url: r.link,
-                  })) || [];
+                let results = [];
+
+                // Prefer answer box if present
+                if (data.answer_box) {
+                  results.push({
+                    title: data.answer_box.title || "Answer Box",
+                    snippet: data.answer_box.answer || data.answer_box.snippet || "",
+                    url: data.answer_box.link || "",
+                  });
+                }
+
+                // Organic results
+                if (data.organic_results) {
+                  results = results.concat(
+                    data.organic_results.map((r) => ({
+                      title: r.title,
+                      snippet: r.snippet,
+                      url: r.link,
+                    }))
+                  );
+                }
 
                 return {
                   tool_call_id: tool.id,

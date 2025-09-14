@@ -1,5 +1,8 @@
-// api/runner.js
 import OpenAI from "openai";
+
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -7,75 +10,88 @@ export default async function handler(req, res) {
   }
 
   try {
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const { query } = req.body;
+    console.log("➡️ Incoming query:", query);
 
-    if (!query) {
-      return res.status(400).json({ error: "Missing query" });
-    }
-
-    // 1. Create a thread
+    // Start a thread
     const thread = await client.beta.threads.create();
+    console.log("🧵 Thread created:", thread.id);
 
-    // 2. Add user message
+    // Add user message
     await client.beta.threads.messages.create(thread.id, {
       role: "user",
       content: query,
     });
 
-    // 3. Start a run
+    // Kick off the run
     let run = await client.beta.threads.runs.create(thread.id, {
       assistant_id: process.env.ASSISTANT_ID,
     });
+    console.log("🚀 Run started:", run.id, "status:", run.status);
 
-    // 4. Handle tool calls if required
-    if (run.status === "requires_action") {
-      const toolCalls = run.required_action.submit_tool_outputs.tool_calls;
+    // Poll until done
+    while (run.status !== "completed" && run.status !== "failed") {
+      console.log("⏳ Polling run status:", run.status);
 
-      const toolOutputs = await Promise.all(
-        toolCalls.map(async (tool) => {
-          if (tool.function.name === "web_search") {
-            const searchQuery = JSON.parse(tool.function.arguments).query;
+      if (run.status === "requires_action") {
+        console.log("⚡ Requires action payload:", JSON.stringify(run.required_action, null, 2));
 
-            // Call your search-service
-            const resp = await fetch("https://search-service.vercel.app/api/search", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ query: searchQuery }),
-            });
-            const results = await resp.json();
+        const toolCalls = run.required_action.submit_tool_outputs.tool_calls;
+        console.log("🔧 Tool calls found:", toolCalls.length);
 
-            return {
-              tool_call_id: tool.id,
-              output: JSON.stringify(results),
-            };
-          }
-        })
-      );
+        const outputs = await Promise.all(
+          toolCalls.map(async (tool) => {
+            console.log("👉 Tool call detail:", JSON.stringify(tool, null, 2));
 
-      // Submit results back to Assistant
-      run = await client.beta.threads.runs.submitToolOutputs(
-        thread.id,
-        run.id,
-        { tool_outputs: toolOutputs }
-      );
-    }
+            if (tool.function.name === "web_search") {
+              const query = JSON.parse(tool.function.arguments).query;
+              console.log("🌍 Web search triggered with query:", query);
 
-    // 5. Poll until run completes
-    while (run.status !== "completed") {
-      await new Promise((r) => setTimeout(r, 1000));
+              // Placeholder: in production call your own search service here
+              const fakeResults = [
+                { title: "Stub Result", snippet: "This is a placeholder result.", url: "https://example.com" }
+              ];
+
+              return {
+                tool_call_id: tool.id,
+                output: JSON.stringify(fakeResults),
+              };
+            }
+
+            return { tool_call_id: tool.id, output: "{}" };
+          })
+        );
+
+        console.log("📤 Submitting tool outputs:", JSON.stringify(outputs, null, 2));
+
+        run = await client.beta.threads.runs.submitToolOutputs(thread.id, run.id, {
+          tool_outputs: outputs,
+        });
+
+        console.log("✅ Submitted tool outputs, new status:", run.status);
+      }
+
+      // Poll again
+      await new Promise((r) => setTimeout(r, 2000));
       run = await client.beta.threads.runs.retrieve(thread.id, run.id);
     }
 
-    // 6. Retrieve final messages
-    const messages = await client.beta.threads.messages.list(thread.id);
+    console.log("🏁 Final run status:", run.status);
 
-    // 7. Extract the latest assistant response
-    const output = messages.data[0].content[0].text.value;
+    if (run.status === "completed") {
+      const messages = await client.beta.threads.messages.list(thread.id);
+      const last = messages.data[0];
+      console.log("💬 Assistant reply:", last.content[0].text.value);
 
-    res.json({ status: run.status, output });
+      return res.status(200).json({
+        status: "completed",
+        output: last.content[0].text.value,
+      });
+    } else {
+      return res.status(500).json({ status: "failed", run });
+    }
   } catch (err) {
-    console.error("Runner error:", err);
-    res.status(500).json({ error: err.message });
+    console.error("❌ Runner error:", err);
+    return res.status(500).json({ error: err.message });
   }
 }

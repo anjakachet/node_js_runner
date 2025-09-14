@@ -49,7 +49,7 @@ export default async function handler(req, res) {
 
               try {
                 const resp = await fetch(
-                  `https://api.searchapi.io/api/v1/search?q=${encodeURIComponent(searchQuery)}&engine=google`,
+                  `https://www.searchapi.io/api/v1/search?q=${encodeURIComponent(searchQuery)}&engine=google`,
                   {
                     headers: {
                       "Authorization": `Bearer ${process.env.SEARCHAPI_API_KEY}`,
